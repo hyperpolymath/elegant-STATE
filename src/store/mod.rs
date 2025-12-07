@@ -1,16 +1,8 @@
 mod sled_store;
 mod indices;
-mod fulltext;
-mod fuzzy;
-mod pandoc;
-mod ocr;
 
 pub use sled_store::SledStore;
 pub use indices::Indices;
-pub use fulltext::{FullTextIndex, SearchResult};
-pub use fuzzy::FuzzySearch;
-pub use pandoc::{PandocConverter, InputFormat, OutputFormat, detect_format};
-pub use ocr::{OcrEngine, OcrLanguage, OcrEngineMode, PageSegMode, is_image_file};
 
 use crate::schema::*;
 use thiserror::Error;

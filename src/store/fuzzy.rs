@@ -55,17 +55,23 @@ impl FuzzySearch {
             return pattern.len() <= max_errors;
         }
 
-        // Use simple Levenshtein-based window matching
         let pattern_chars: Vec<char> = pattern.chars().collect();
         let text_chars: Vec<char> = text.chars().collect();
+        let pat_len = pattern_chars.len();
 
-        // Sliding window approach
-        for start in 0..=text_chars.len().saturating_sub(pattern_chars.len().saturating_sub(max_errors)) {
-            let end = (start + pattern_chars.len() + max_errors).min(text_chars.len());
-            let window: String = text_chars[start..end].iter().collect();
+        // Try windows of varying sizes: pattern_len ± max_errors
+        let min_window = pat_len.saturating_sub(max_errors);
+        let max_window = pat_len + max_errors;
 
-            if levenshtein(&pattern_chars, &window.chars().collect::<Vec<_>>()) <= max_errors {
-                return true;
+        for window_size in min_window..=max_window {
+            if window_size > text_chars.len() {
+                continue;
+            }
+            for start in 0..=text_chars.len() - window_size {
+                let window: Vec<char> = text_chars[start..start + window_size].to_vec();
+                if levenshtein(&pattern_chars, &window) <= max_errors {
+                    return true;
+                }
             }
         }
 

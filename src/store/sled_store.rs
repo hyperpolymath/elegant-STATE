@@ -51,11 +51,11 @@ impl SledStore {
     }
 
     fn serialize<T: serde::Serialize>(value: &T) -> Result<Vec<u8>> {
-        bincode::serialize(value).map_err(|e| StoreError::Serialization(e.to_string()))
+        serde_json::to_vec(value).map_err(|e| StoreError::Serialization(e.to_string()))
     }
 
     fn deserialize<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
-        bincode::deserialize(bytes).map_err(|e| StoreError::Serialization(e.to_string()))
+        serde_json::from_slice(bytes).map_err(|e| StoreError::Serialization(e.to_string()))
     }
 
     fn log_event(&self, event: StateEvent) -> Result<()> {

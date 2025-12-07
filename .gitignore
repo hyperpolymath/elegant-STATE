@@ -1,0 +1,24 @@
+# Rust build output
+/target/
+
+# Editor/IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Database (local dev)
+*.db
+*.db-journal
+
+# Logs
+*.log

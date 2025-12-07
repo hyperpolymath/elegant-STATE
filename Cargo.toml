@@ -17,11 +17,6 @@ path = "src/main.rs"
 [dependencies]
 # Database
 sled = "0.34"
-tantivy = "0.22"              # Full-text search
-
-# Fuzzy matching (agrep-like)
-fuzzy-matcher = "0.3"
-nucleo-matcher = "0.3"        # Fast fuzzy matching
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -58,10 +53,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Utilities
 dirs = "5.0"
 
-# Async streaming (for subscriptions)
-async-stream = "0.3"
-futures-util = "0.3"
-
 [dev-dependencies]
 tempfile = "3.10"
 tokio-test = "0.4"
@@ -70,14 +61,3 @@ tokio-test = "0.4"
 lto = true
 codegen-units = 1
 strip = true
-
-[lints.rust]
-unsafe_code = "warn"
-missing_docs = "warn"
-
-[lints.clippy]
-all = "warn"
-pedantic = "warn"
-nursery = "warn"
-unwrap_used = "warn"
-expect_used = "warn"

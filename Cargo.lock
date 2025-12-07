@@ -279,7 +279,7 @@ name = "axum"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b098575ebe77cb6d14fc7f32749631a6e44edbef6b796f89b020e99ba20d425"
-dependencies = [
+dependencies = [requests
  "axum-core 0.5.5",
  "base64",
  "bytes",
@@ -1626,7 +1626,7 @@ checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 dependencies = [
  "getrandom 0.2.16",
 ]
-
+requests
 [[package]]
 name = "rand_core"
 version = "0.9.3"

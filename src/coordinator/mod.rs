@@ -11,6 +11,6 @@ mod voting;
 mod reputation;
 
 pub use capabilities::{CapabilityMode, AgentCapabilities, CapabilityConfig};
-pub use proposal::{Proposal, ProposalStatus, ProposalManager, ProposalTarget};
-pub use voting::{Vote, VoteDecision, VotingStrategy, VotingCoordinator, VotingResult};
+pub use proposal::{Proposal, ProposalStatus, ProposalManager};
+pub use voting::{Vote, VoteDecision, VotingStrategy, VotingCoordinator};
 pub use reputation::{Reputation, ReputationTracker};

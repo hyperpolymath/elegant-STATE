@@ -7,9 +7,10 @@
 //! - Proposal updates
 //! - Vote notifications
 
-use async_graphql::{Context, Subscription, Result};
+use async_graphql::{Context, Subscription, Result, ID};
 use futures_util::Stream;
 use tokio::sync::broadcast;
+use std::pin::Pin;
 
 use super::types::{StateEvent, StateNode, NodeKind};
 
@@ -38,11 +39,11 @@ pub struct SubscriptionRoot;
 #[Subscription]
 impl SubscriptionRoot {
     /// Subscribe to node changes
-    async fn node_changed(
+    async fn node_changed<'ctx>(
         &self,
-        ctx: &Context<'_>,
+        ctx: &Context<'ctx>,
         kinds: Option<Vec<NodeKind>>,
-    ) -> Result<impl Stream<Item = StateNode>> {
+    ) -> Result<Pin<Box<dyn Stream<Item = StateNode> + Send + 'ctx>>> {
         let receiver = ctx.data::<EventSender>()?.subscribe();
 
         let stream = async_stream::stream! {
@@ -64,14 +65,14 @@ impl SubscriptionRoot {
             }
         };
 
-        Ok(stream)
+        Ok(Box::pin(stream))
     }
 
     /// Subscribe to all events
-    async fn event_stream(
+    async fn event_stream<'ctx>(
         &self,
-        ctx: &Context<'_>,
-    ) -> Result<impl Stream<Item = StateEvent>> {
+        ctx: &Context<'ctx>,
+    ) -> Result<Pin<Box<dyn Stream<Item = StateEvent> + Send + 'ctx>>> {
         let receiver = ctx.data::<EventSender>()?.subscribe();
 
         let stream = async_stream::stream! {
@@ -83,15 +84,15 @@ impl SubscriptionRoot {
             }
         };
 
-        Ok(stream)
-    }
+        Ok(Box::pin(stream))
+    }Nickel package for Guix — currently not in Guix, may need to package it
 
     /// Subscribe to events by specific agent
-    async fn events_by_agent(
+    async fn events_by_agent<'ctx>(
         &self,
-        ctx: &Context<'_>,
+        ctx: &Context<'ctx>,
         agent: String,
-    ) -> Result<impl Stream<Item = StateEvent>> {
+    ) -> Result<Pin<Box<dyn Stream<Item = StateEvent> + Send + 'ctx>>> {
         let receiver = ctx.data::<EventSender>()?.subscribe();
 
         let stream = async_stream::stream! {
@@ -100,12 +101,12 @@ impl SubscriptionRoot {
                 if let SubscriptionEvent::Event(e) = event {
                     if e.agent.to_string() == agent {
                         yield e.into();
-                    }
+                    }p
                 }
             }
         };
 
-        Ok(stream)
+        Ok(Box::pin(stream))
     }
 }
 

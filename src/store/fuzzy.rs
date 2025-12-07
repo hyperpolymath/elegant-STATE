@@ -75,13 +75,13 @@ impl FuzzySearch {
     /// Search a list of items and return sorted by relevance
     pub fn search<'a, T, F>(&self, pattern: &str, items: &'a [T], extract: F) -> Vec<(&'a T, i64)>
     where
-        F: Fn(&T) -> String,
+        F: Fn(&T) -> &str,
     {
         let mut matches: Vec<(&T, i64)> = items
             .iter()
             .filter_map(|item| {
                 let text = extract(item);
-                self.skim_match(pattern, &text).map(|score| (item, score))
+                self.skim_match(pattern, text).map(|score| (item, score))
             })
             .collect();
 
@@ -177,7 +177,7 @@ mod tests {
             "rustacean",
         ];
 
-        let results = fuzzy.search("rust", &items, |s| s.to_string());
+        let results = fuzzy.search("rust", &items, |s| s);
 
         assert!(!results.is_empty());
         // "rust programming" or "rustacean" should be top matches

@@ -7,10 +7,9 @@
 //! - Proposal updates
 //! - Vote notifications
 
-use async_graphql::{Context, Subscription, Result, ID};
+use async_graphql::{Context, Subscription, Result};
 use futures_util::Stream;
 use tokio::sync::broadcast;
-use std::pin::Pin;
 
 use super::types::{StateEvent, StateNode, NodeKind};
 
@@ -39,11 +38,11 @@ pub struct SubscriptionRoot;
 #[Subscription]
 impl SubscriptionRoot {
     /// Subscribe to node changes
-    async fn node_changed<'ctx>(
+    async fn node_changed(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         kinds: Option<Vec<NodeKind>>,
-    ) -> Result<Pin<Box<dyn Stream<Item = StateNode> + Send + 'ctx>>> {
+    ) -> Result<impl Stream<Item = StateNode>> {
         let receiver = ctx.data::<EventSender>()?.subscribe();
 
         let stream = async_stream::stream! {
@@ -65,14 +64,14 @@ impl SubscriptionRoot {
             }
         };
 
-        Ok(Box::pin(stream))
+        Ok(stream)
     }
 
     /// Subscribe to all events
-    async fn event_stream<'ctx>(
+    async fn event_stream(
         &self,
-        ctx: &Context<'ctx>,
-    ) -> Result<Pin<Box<dyn Stream<Item = StateEvent> + Send + 'ctx>>> {
+        ctx: &Context<'_>,
+    ) -> Result<impl Stream<Item = StateEvent>> {
         let receiver = ctx.data::<EventSender>()?.subscribe();
 
         let stream = async_stream::stream! {
@@ -84,15 +83,15 @@ impl SubscriptionRoot {
             }
         };
 
-        Ok(Box::pin(stream))
+        Ok(stream)
     }
 
     /// Subscribe to events by specific agent
-    async fn events_by_agent<'ctx>(
+    async fn events_by_agent(
         &self,
-        ctx: &Context<'ctx>,
+        ctx: &Context<'_>,
         agent: String,
-    ) -> Result<Pin<Box<dyn Stream<Item = StateEvent> + Send + 'ctx>>> {
+    ) -> Result<impl Stream<Item = StateEvent>> {
         let receiver = ctx.data::<EventSender>()?.subscribe();
 
         let stream = async_stream::stream! {
@@ -106,7 +105,7 @@ impl SubscriptionRoot {
             }
         };
 
-        Ok(Box::pin(stream))
+        Ok(stream)
     }
 }
 

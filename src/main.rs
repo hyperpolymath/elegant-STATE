@@ -196,11 +196,11 @@ async fn main() -> Result<()> {
         // COORDINATION
         // ─────────────────────────────────────────────────────────────────────
         Commands::Agent { command } => {
-            handle_agent_command(command, output_format)?;
+            handle_agent_command(command, &store, output_format)?;
         }
 
         Commands::Proposal { command } => {
-            handle_proposal_command(command, output_format)?;
+            handle_proposal_command(command, &store, &agent, output_format)?;
         }
 
         Commands::Vote { proposal_id, decision, reason } => {
@@ -806,33 +806,43 @@ fn handle_search_command(
     Ok(())
 }
 
-fn handle_agent_command(command: AgentCommands, output_format: OutputFormat) -> Result<()> {
-    let mut config = CapabilityConfig::default();
-    let mut tracker = ReputationTracker::new();
-
-    // Track registered modules (would persist in real implementation)
-    static REGISTERED_MODULES: std::sync::LazyLock<std::sync::Mutex<Vec<String>>> =
-        std::sync::LazyLock::new(|| std::sync::Mutex::new(Vec::new()));
+fn handle_agent_command(
+    command: AgentCommands,
+    store: &Arc<SledStore>,
+    _output_format: OutputFormat,
+) -> Result<()> {
+    // Load config from store or use default
+    let mut config = store.get_capability_config()
+        .ok()
+        .flatten()
+        .unwrap_or_default();
 
     match command {
         AgentCommands::List { verbose, reputation } => {
             let mut agents: Vec<AgentId> = vec![AgentId::User, AgentId::Claude, AgentId::Llama, AgentId::System];
 
-            // Add registered modules
-            if let Ok(modules) = REGISTERED_MODULES.lock() {
-                for m in modules.iter() {
-                    agents.push(AgentId::Module(m.clone()));
+            // Add registered modules from persisted configs
+            let configs = store.list_agent_configs().unwrap_or_default();
+            for cfg in &configs {
+                if let AgentId::Module(_) = &cfg.agent {
+                    if !agents.iter().any(|a| *a == cfg.agent) {
+                        agents.push(cfg.agent.clone());
+                    }
                 }
             }
 
             for agent in agents {
-                let caps = config.get_capabilities(&agent);
+                // Get config from store or default
+                let caps = store.get_agent_config(&agent)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| config.get_capabilities(&agent));
                 print!("{}: mode={}", agent, caps.mode);
                 if verbose {
                     print!(", can_vote={}, weight={}", caps.can_vote, caps.vote_weight);
                 }
                 if reputation {
-                    if let Some(rep) = tracker.get(&agent) {
+                    if let Ok(Some(rep)) = store.get_reputation(&agent) {
                         print!(", reputation={:.2}", rep.score);
                     }
                 }
@@ -841,23 +851,29 @@ fn handle_agent_command(command: AgentCommands, output_format: OutputFormat) -> 
         }
         AgentCommands::Show { agent, history } => {
             let agent_id = parse_agent_id(&agent);
-            let caps = config.get_capabilities(&agent_id);
+            let caps = store.get_agent_config(&agent_id)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| config.get_capabilities(&agent_id));
             println!("Agent: {}", agent_id);
             println!("Mode: {}", caps.mode);
             println!("Can vote: {}", caps.can_vote);
             println!("Vote weight: {}", caps.vote_weight);
-            if let Some(rep) = tracker.get(&agent_id) {
+            if let Ok(Some(rep)) = store.get_reputation(&agent_id) {
                 println!("Reputation: {:.2}", rep.score);
                 println!("Total votes: {}", rep.total_votes);
                 println!("Correct votes: {}", rep.correct_votes);
             }
             if history {
-                println!("\nReputation history: (not yet persisted)");
+                println!("\nReputation history available in event log");
             }
         }
         AgentCommands::Set { agent, mode, can_vote, vote_weight } => {
             let agent_id = parse_agent_id(&agent);
-            let mut caps = config.get_capabilities(&agent_id);
+            let mut caps = store.get_agent_config(&agent_id)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| config.get_capabilities(&agent_id));
             if let Some(m) = mode {
                 caps.mode = match m {
                     CapabilityModeArg::Direct => CapabilityMode::Direct,
@@ -871,7 +887,7 @@ fn handle_agent_command(command: AgentCommands, output_format: OutputFormat) -> 
             if let Some(vw) = vote_weight {
                 caps.vote_weight = vw;
             }
-            config.set_capabilities(caps).map_err(|e| anyhow!(e))?;
+            store.save_agent_config(&caps).map_err(|e| anyhow!("Failed to save config: {}", e))?;
             println!("Updated agent: {}", agent);
         }
         AgentCommands::Register { name, mode, description } => {
@@ -880,18 +896,14 @@ fn handle_agent_command(command: AgentCommands, output_format: OutputFormat) -> 
                 return Err(anyhow!("Invalid module name: '{}' (cannot be empty or contain ':' or spaces)", name));
             }
 
-            // Check if already registered
-            if let Ok(mut modules) = REGISTERED_MODULES.lock() {
-                if modules.contains(&name) {
-                    return Err(anyhow!("Module '{}' is already registered", name));
-                }
+            let agent_id = AgentId::Module(name.clone());
 
-                // Register the module
-                modules.push(name.clone());
+            // Check if already registered
+            if store.get_agent_config(&agent_id).ok().flatten().is_some() {
+                return Err(anyhow!("Module '{}' is already registered", name));
             }
 
-            // Set capabilities
-            let agent_id = AgentId::Module(name.clone());
+            // Set capabilities and persist
             let caps = AgentCapabilities {
                 agent: agent_id.clone(),
                 mode: match mode {
@@ -902,7 +914,7 @@ fn handle_agent_command(command: AgentCommands, output_format: OutputFormat) -> 
                 can_vote: true,
                 vote_weight: 1.0,
             };
-            config.set_capabilities(caps).map_err(|e| anyhow!(e))?;
+            store.save_agent_config(&caps).map_err(|e| anyhow!("Failed to save config: {}", e))?;
 
             println!("Registered module: {}", name);
             if let Some(desc) = description {
@@ -922,31 +934,35 @@ fn handle_agent_command(command: AgentCommands, output_format: OutputFormat) -> 
                 }
             }
 
-            if let Ok(mut modules) = REGISTERED_MODULES.lock() {
-                if let Some(pos) = modules.iter().position(|m| m == &name) {
-                    modules.remove(pos);
-                    println!("Unregistered module: {}", name);
-                } else {
-                    return Err(anyhow!("Module '{}' is not registered", name));
-                }
+            let agent_id = AgentId::Module(name.clone());
+            // Check if registered
+            if store.get_agent_config(&agent_id).ok().flatten().is_none() {
+                return Err(anyhow!("Module '{}' is not registered", name));
             }
+
+            // Remove by setting to default/observer
+            let caps = AgentCapabilities::new(agent_id).as_observer();
+            store.save_agent_config(&caps).map_err(|e| anyhow!("Failed to save config: {}", e))?;
+            println!("Unregistered module: {}", name);
         }
         AgentCommands::Leaderboard { limit, sort } => {
-            let mut leaderboard = tracker.leaderboard();
+            let mut reputations = store.list_reputations().unwrap_or_default();
 
             // Sort by specified field
             match sort.as_str() {
-                "accuracy" => leaderboard.sort_by(|a, b| {
+                "accuracy" => reputations.sort_by(|a, b| {
                     b.accuracy().partial_cmp(&a.accuracy()).unwrap_or(std::cmp::Ordering::Equal)
                 }),
-                "votes" => leaderboard.sort_by(|a, b| b.total_votes.cmp(&a.total_votes)),
-                _ => {} // Default is score, already sorted
+                "votes" => reputations.sort_by(|a, b| b.total_votes.cmp(&a.total_votes)),
+                _ => reputations.sort_by(|a, b| {
+                    b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+                }),
             }
 
-            if leaderboard.is_empty() {
+            if reputations.is_empty() {
                 println!("No reputation data yet.");
             } else {
-                for (i, rep) in leaderboard.into_iter().take(limit).enumerate() {
+                for (i, rep) in reputations.into_iter().take(limit).enumerate() {
                     println!("{}. {} - score: {:.2}, accuracy: {:.1}%, votes: {}",
                         i + 1, rep.agent, rep.score, rep.accuracy() * 100.0, rep.total_votes);
                 }
@@ -966,13 +982,16 @@ fn handle_agent_command(command: AgentCommands, output_format: OutputFormat) -> 
             }
 
             if agent == "all" {
-                tracker = ReputationTracker::new();
+                let all_reps = store.list_reputations().unwrap_or_default();
+                for rep in all_reps {
+                    let new_rep = elegant_state::Reputation::new(rep.agent);
+                    store.save_reputation(&new_rep).map_err(|e| anyhow!("Failed to save: {}", e))?;
+                }
                 println!("Reset reputation for all agents");
             } else {
-                // Reset by creating a new reputation for the agent
                 let agent_id = parse_agent_id(&agent);
-                let rep = tracker.get_or_create(&agent_id);
-                *rep = elegant_state::Reputation::new(agent_id.clone());
+                let new_rep = elegant_state::Reputation::new(agent_id.clone());
+                store.save_reputation(&new_rep).map_err(|e| anyhow!("Failed to save: {}", e))?;
                 println!("Reset reputation for {}", agent);
             }
         }
@@ -980,7 +999,11 @@ fn handle_agent_command(command: AgentCommands, output_format: OutputFormat) -> 
             if factor < 0.0 || factor > 1.0 {
                 return Err(anyhow!("Decay factor must be between 0.0 and 1.0"));
             }
-            tracker.apply_decay_all(factor);
+            let all_reps = store.list_reputations().unwrap_or_default();
+            for mut rep in all_reps {
+                rep.apply_decay(factor);
+                store.save_reputation(&rep).map_err(|e| anyhow!("Failed to save: {}", e))?;
+            }
             println!("Applied decay factor {} to all reputations", factor);
         }
         AgentCommands::Switch { agent } => {
@@ -996,26 +1019,30 @@ fn handle_agent_command(command: AgentCommands, output_format: OutputFormat) -> 
     Ok(())
 }
 
-fn handle_proposal_command(command: ProposalCommands, output_format: OutputFormat) -> Result<()> {
+fn handle_proposal_command(
+    command: ProposalCommands,
+    store: &Arc<SledStore>,
+    agent: &AgentId,
+    _output_format: OutputFormat,
+) -> Result<()> {
     use elegant_state::{ProposalTarget, Operation};
 
-    // Use static for persistence within the session
-    static PROPOSAL_MANAGER: std::sync::LazyLock<std::sync::Mutex<ProposalManager>> =
-        std::sync::LazyLock::new(|| std::sync::Mutex::new(ProposalManager::new()));
-    static VOTING_COORDINATOR: std::sync::LazyLock<std::sync::Mutex<VotingCoordinator>> =
-        std::sync::LazyLock::new(|| std::sync::Mutex::new(VotingCoordinator::default()));
-
-    let mut manager = PROPOSAL_MANAGER.lock().map_err(|e| anyhow!("Lock error: {}", e))?;
-    let mut coordinator = VOTING_COORDINATOR.lock().map_err(|e| anyhow!("Lock error: {}", e))?;
-    let config = CapabilityConfig::default();
+    // Get capability config from store or use default
+    let config = store.get_capability_config()
+        .ok()
+        .flatten()
+        .unwrap_or_default();
 
     match command {
-        ProposalCommands::List { pending, mine, status, limit, verbose } => {
-            let proposals = if pending {
-                manager.pending()
+        ProposalCommands::List { pending, mine: _, status, limit, verbose } => {
+            let filter_status = if pending {
+                Some(ProposalStatus::Pending)
             } else {
-                manager.all()
+                None
             };
+
+            let proposals = store.list_proposals(filter_status, limit)
+                .map_err(|e| anyhow!("Failed to list proposals: {}", e))?;
 
             let filtered: Vec<_> = proposals
                 .into_iter()
@@ -1028,7 +1055,6 @@ fn handle_proposal_command(command: ProposalCommands, output_format: OutputForma
                     }
                     true
                 })
-                .take(limit)
                 .collect();
 
             if filtered.is_empty() {
@@ -1038,7 +1064,7 @@ fn handle_proposal_command(command: ProposalCommands, output_format: OutputForma
                     print!("{} [{:?}] by {}", p.id, p.status, p.proposer);
                     if verbose {
                         print!(" - {:?} on {:?}", p.operation, p.target);
-                        let votes = coordinator.get_votes(p.id);
+                        let votes = store.get_votes_for_proposal(p.id).unwrap_or_default();
                         print!(" (votes: {})", votes.len());
                     }
                     println!();
@@ -1047,7 +1073,7 @@ fn handle_proposal_command(command: ProposalCommands, output_format: OutputForma
         }
         ProposalCommands::Show { id, votes: show_votes, payload } => {
             let proposal_id = id.parse().map_err(|e| anyhow!("Invalid proposal ID: {}", e))?;
-            match manager.get(proposal_id) {
+            match store.get_proposal(proposal_id).map_err(|e| anyhow!("Store error: {}", e))? {
                 Some(p) => {
                     println!("Proposal: {}", p.id);
                     println!("Status: {:?}", p.status);
@@ -1061,7 +1087,7 @@ fn handle_proposal_command(command: ProposalCommands, output_format: OutputForma
                     }
 
                     if show_votes {
-                        let votes = coordinator.get_votes(proposal_id);
+                        let votes = store.get_votes_for_proposal(proposal_id).unwrap_or_default();
                         println!("\nVotes ({}):", votes.len());
                         for vote in votes {
                             println!("  {} - {:?}{}", vote.voter, vote.decision,
@@ -1105,7 +1131,7 @@ fn handle_proposal_command(command: ProposalCommands, output_format: OutputForma
             let payload_value: serde_json::Value = serde_json::from_str(&payload)?;
 
             let mut proposal = Proposal::new(
-                AgentId::User,
+                agent.clone(),
                 op,
                 tgt,
                 payload_value,
@@ -1114,13 +1140,16 @@ fn handle_proposal_command(command: ProposalCommands, output_format: OutputForma
                 proposal = proposal.with_rationale(r);
             }
 
-            let id = manager.submit(proposal);
+            let id = proposal.id;
+            store.save_proposal(&proposal)
+                .map_err(|e| anyhow!("Failed to save proposal: {}", e))?;
             println!("Created proposal: {}", id);
         }
         ProposalCommands::Withdraw { id, reason: _reason } => {
             let proposal_id = id.parse().map_err(|e| anyhow!("Invalid proposal ID: {}", e))?;
-            if let Some(p) = manager.get_mut(proposal_id) {
+            if let Some(mut p) = store.get_proposal(proposal_id).map_err(|e| anyhow!("Store error: {}", e))? {
                 p.withdraw();
+                store.save_proposal(&p).map_err(|e| anyhow!("Failed to save: {}", e))?;
                 println!("Withdrawn proposal: {}", id);
             } else {
                 println!("Proposal {} not found", id);
@@ -1128,30 +1157,52 @@ fn handle_proposal_command(command: ProposalCommands, output_format: OutputForma
         }
         ProposalCommands::Approve { id, reason } => {
             let proposal_id = id.parse().map_err(|e| anyhow!("Invalid proposal ID: {}", e))?;
-            let mut vote = Vote::new(proposal_id, AgentId::User, DomainVoteDecision::Approve);
+
+            // Check proposal exists
+            if store.get_proposal(proposal_id).map_err(|e| anyhow!("Store error: {}", e))?.is_none() {
+                return Err(anyhow!("Proposal {} not found", id));
+            }
+
+            let mut vote = Vote::new(proposal_id, agent.clone(), DomainVoteDecision::Approve);
             if let Some(r) = reason {
                 vote = vote.with_reason(r);
             }
-            coordinator.cast_vote(vote, &config).map_err(|e| anyhow!(e))?;
+
+            // Apply vote weight from config
+            let caps = config.get_capabilities(agent);
+            vote = vote.with_weight(caps.vote_weight);
+
+            store.save_vote(&vote).map_err(|e| anyhow!("Failed to save vote: {}", e))?;
             println!("Voted to approve proposal: {}", id);
         }
         ProposalCommands::Reject { id, reason } => {
             let proposal_id = id.parse().map_err(|e| anyhow!("Invalid proposal ID: {}", e))?;
-            let mut vote = Vote::new(proposal_id, AgentId::User, DomainVoteDecision::Reject);
+
+            // Check proposal exists
+            if store.get_proposal(proposal_id).map_err(|e| anyhow!("Store error: {}", e))?.is_none() {
+                return Err(anyhow!("Proposal {} not found", id));
+            }
+
+            let mut vote = Vote::new(proposal_id, agent.clone(), DomainVoteDecision::Reject);
             if let Some(r) = reason {
                 vote = vote.with_reason(r);
             }
-            coordinator.cast_vote(vote, &config).map_err(|e| anyhow!(e))?;
+
+            // Apply vote weight from config
+            let caps = config.get_capabilities(agent);
+            vote = vote.with_weight(caps.vote_weight);
+
+            store.save_vote(&vote).map_err(|e| anyhow!("Failed to save vote: {}", e))?;
             println!("Voted to reject proposal: {}", id);
         }
         ProposalCommands::Votes { id, verbose } => {
             let proposal_id = id.parse().map_err(|e| anyhow!("Invalid proposal ID: {}", e))?;
-            let votes = coordinator.get_votes(proposal_id);
+            let votes = store.get_votes_for_proposal(proposal_id).unwrap_or_default();
             if votes.is_empty() {
                 println!("No votes yet on proposal {}", id);
             } else {
                 println!("Votes on proposal {}:", id);
-                for vote in votes {
+                for vote in &votes {
                     print!("  {} - {:?}", vote.voter, vote.decision);
                     if verbose {
                         print!(" at {}", vote.timestamp.format("%Y-%m-%d %H:%M:%S"));
@@ -1171,8 +1222,8 @@ fn handle_proposal_command(command: ProposalCommands, output_format: OutputForma
         }
         ProposalCommands::Execute { id, force } => {
             let proposal_id = id.parse().map_err(|e| anyhow!("Invalid proposal ID: {}", e))?;
-            match manager.get(proposal_id) {
-                Some(p) => {
+            match store.get_proposal(proposal_id).map_err(|e| anyhow!("Store error: {}", e))? {
+                Some(mut p) => {
                     if !matches!(p.status, ProposalStatus::Approved) {
                         return Err(anyhow!("Proposal {} is not approved (status: {:?})", id, p.status));
                     }
@@ -1188,33 +1239,104 @@ fn handle_proposal_command(command: ProposalCommands, output_format: OutputForma
                         }
                     }
 
-                    // In a real implementation, this would apply the operation
+                    // Execute the proposal based on operation and target
+                    match (&p.operation, &p.target) {
+                        (Operation::Create, ProposalTarget::Node { kind, .. }) => {
+                            let kind_str = kind.as_deref().unwrap_or("insight");
+                            let node_kind = kind_str.parse().unwrap_or(NodeKind::Insight);
+                            let node = StateNode::new(node_kind, p.payload.clone());
+                            let created = store.create_node(node, p.proposer.clone())
+                                .map_err(|e| anyhow!("Failed to create node: {}", e))?;
+                            println!("Created node: {}", created.id);
+                        }
+                        (Operation::Update, ProposalTarget::Node { id: Some(node_id), .. }) => {
+                            store.update_node(*node_id, p.payload.clone(), p.proposer.clone())
+                                .map_err(|e| anyhow!("Failed to update node: {}", e))?;
+                            println!("Updated node: {}", node_id);
+                        }
+                        (Operation::Delete, ProposalTarget::Node { id: Some(node_id), .. }) => {
+                            store.delete_node(*node_id, p.proposer.clone())
+                                .map_err(|e| anyhow!("Failed to delete node: {}", e))?;
+                            println!("Deleted node: {}", node_id);
+                        }
+                        (Operation::Link, ProposalTarget::Edge { from: Some(from), to: Some(to), .. }) => {
+                            let edge_kind = p.payload.get("kind")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("related_to")
+                                .parse()
+                                .unwrap_or(EdgeKind::RelatedTo);
+                            let edge = StateEdge::new(*from, *to, edge_kind);
+                            let created = store.create_edge(edge, p.proposer.clone())
+                                .map_err(|e| anyhow!("Failed to create edge: {}", e))?;
+                            println!("Created edge: {}", created.id);
+                        }
+                        (Operation::Unlink, ProposalTarget::Edge { id: Some(edge_id), .. }) => {
+                            store.delete_edge(*edge_id, p.proposer.clone())
+                                .map_err(|e| anyhow!("Failed to delete edge: {}", e))?;
+                            println!("Deleted edge: {}", edge_id);
+                        }
+                        _ => {
+                            return Err(anyhow!("Cannot execute {:?} on {:?}: missing required IDs", p.operation, p.target));
+                        }
+                    }
+
+                    // Mark proposal as executed (still approved status but resolved)
+                    p.resolved_at = Some(chrono::Utc::now());
+                    p.resolution_reason = Some("Executed".into());
+                    store.save_proposal(&p).map_err(|e| anyhow!("Failed to update proposal: {}", e))?;
+
                     println!("Executed proposal: {}", id);
-                    println!("Operation: {:?} on {:?}", p.operation, p.target);
                 }
                 None => println!("Proposal {} not found", id),
             }
         }
         ProposalCommands::Expire { older_than: _older_than, dry_run } => {
-            // Call expire_old without parameters (it uses the configured expiry)
+            let proposals = store.list_proposals(Some(ProposalStatus::Pending), 1000)
+                .map_err(|e| anyhow!("Store error: {}", e))?;
+            let now = chrono::Utc::now();
+            let expiry = chrono::Duration::hours(1); // Default 1 hour expiry
+            let mut expired_count = 0;
+
+            for mut p in proposals {
+                if now - p.created_at > expiry {
+                    if !dry_run {
+                        p.status = ProposalStatus::Expired;
+                        p.resolved_at = Some(now);
+                        p.resolution_reason = Some("Expired".into());
+                        store.save_proposal(&p).map_err(|e| anyhow!("Failed to save: {}", e))?;
+                    }
+                    expired_count += 1;
+                }
+            }
+
             if dry_run {
-                let pending_count = manager.pending().len();
-                println!("Would check {} pending proposals for expiry", pending_count);
+                println!("Would expire {} proposals", expired_count);
             } else {
-                manager.expire_old();
-                println!("Expired old proposals");
+                println!("Expired {} proposals", expired_count);
             }
         }
         ProposalCommands::Cleanup { keep, dry_run } => {
-            // Parse keep duration (e.g., "7d" -> 7 days)
             let duration = parse_duration(&keep).unwrap_or(chrono::Duration::days(7));
+            let now = chrono::Utc::now();
+            let all_proposals = store.list_proposals(None, 10000)
+                .map_err(|e| anyhow!("Store error: {}", e))?;
+            let mut cleanup_count = 0;
+
+            for p in all_proposals {
+                if let Some(resolved_at) = p.resolved_at {
+                    if now - resolved_at > duration {
+                        if !dry_run {
+                            store.delete_proposal(p.id).map_err(|e| anyhow!("Failed to delete: {}", e))?;
+                        }
+                        cleanup_count += 1;
+                    }
+                }
+            }
+
             if dry_run {
-                let all_count = manager.all().len();
-                println!("Would clean up resolved proposals older than {}", keep);
-                println!("Current total: {} proposals", all_count);
+                println!("Would clean up {} resolved proposals older than {}", cleanup_count, keep);
             } else {
-                manager.cleanup(duration);
-                println!("Cleaned up resolved proposals older than {}", keep);
+                println!("Cleaned up {} resolved proposals older than {}", cleanup_count, keep);
             }
         }
     }

@@ -459,8 +459,7 @@ async fn main() -> Result<()> {
         }
 
         Commands::Repl { history } => {
-            println!("REPL mode not yet implemented");
-            println!("Use --help for available commands");
+            run_repl(&store, &agent, history, &fulltext_index)?;
         }
 
         Commands::Watch { command, debounce } => {
@@ -1035,39 +1034,47 @@ async fn handle_serve_command(
     match command {
         ServeCommands::Http { port, host } => {
             use async_graphql::http::GraphiQLSource;
+            use async_graphql_axum::GraphQLSubscription;
             use axum::{
-                body::Bytes,
-                http::header::CONTENT_TYPE,
-                response::{Html, IntoResponse},
+                response::Html,
                 routing::get,
                 Json, Router,
             };
 
             let schema = build_schema(store);
 
-            // Simple GraphQL handler using Json extractor
-            let schema_clone = schema.clone();
+            // GraphQL POST handler
+            let schema_post = schema.clone();
             let graphql_handler = move |Json(request): Json<async_graphql::Request>| {
-                let schema = schema_clone.clone();
+                let schema = schema_post.clone();
                 async move {
                     let response = schema.execute(request).await;
                     Json(response)
                 }
             };
 
+            // GraphiQL playground with subscription support
             let graphiql_handler = || async {
-                Html(GraphiQLSource::build().endpoint("/graphql").finish())
+                Html(
+                    GraphiQLSource::build()
+                        .endpoint("/graphql")
+                        .subscription_endpoint("/ws")
+                        .finish(),
+                )
             };
 
             let health_handler = || async { "OK" };
 
             let app = Router::new()
                 .route("/graphql", axum::routing::post(graphql_handler).get(graphiql_handler))
+                .route_service("/ws", GraphQLSubscription::new(schema))
                 .route("/health", get(health_handler));
 
             let addr = format!("{}:{}", host, port);
             if !quiet {
                 println!("GraphQL server running at http://{}/graphql", addr);
+                println!("WebSocket subscriptions at ws://{}/ws", addr);
+                println!("GraphiQL playground at http://{}/graphql", addr);
             }
 
             let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -1129,4 +1136,407 @@ async fn handle_graphql_command(command: GraphqlCommands, store: &Arc<SledStore>
         }
     }
     Ok(())
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// REPL
+// ══════════════════════════════════════════════════════════════════════════════
+
+fn run_repl(
+    store: &Arc<SledStore>,
+    agent: &AgentId,
+    history_file: Option<String>,
+    fulltext_index: &Option<FullTextIndex>,
+) -> Result<()> {
+    use rustyline::error::ReadlineError;
+    use rustyline::{DefaultEditor, Result as RlResult};
+
+    println!("elegant-STATE REPL v{}", env!("CARGO_PKG_VERSION"));
+    println!("Type 'help' for commands, 'quit' or Ctrl-D to exit\n");
+
+    let history_path = history_file.unwrap_or_else(|| {
+        dirs::data_dir()
+            .map(|p| p.join("elegant-state").join("repl_history"))
+            .unwrap_or_else(|| std::path::PathBuf::from(".repl_history"))
+            .to_string_lossy()
+            .to_string()
+    });
+
+    let mut rl = DefaultEditor::new().map_err(|e| anyhow!("Failed to create editor: {}", e))?;
+
+    // Load history
+    if std::path::Path::new(&history_path).exists() {
+        let _ = rl.load_history(&history_path);
+    }
+
+    loop {
+        let prompt = format!("state({})> ", agent);
+        match rl.readline(&prompt) {
+            Ok(line) => {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+
+                let _ = rl.add_history_entry(line);
+
+                // Parse and execute command
+                match execute_repl_command(line, store, agent, fulltext_index) {
+                    Ok(true) => {
+                        // Save history before exiting
+                        if let Some(parent) = std::path::Path::new(&history_path).parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        let _ = rl.save_history(&history_path);
+                        break;
+                    }
+                    Ok(false) => {}
+                    Err(e) => eprintln!("Error: {}", e),
+                }
+            }
+            Err(ReadlineError::Interrupted) => {
+                println!("^C");
+            }
+            Err(ReadlineError::Eof) => {
+                println!("Bye!");
+                // Save history before exiting
+                if let Some(parent) = std::path::Path::new(&history_path).parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = rl.save_history(&history_path);
+                break;
+            }
+            Err(err) => {
+                eprintln!("Error: {:?}", err);
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn execute_repl_command(
+    line: &str,
+    store: &Arc<SledStore>,
+    agent: &AgentId,
+    fulltext_index: &Option<FullTextIndex>,
+) -> Result<bool> {
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    if parts.is_empty() {
+        return Ok(false);
+    }
+
+    match parts[0] {
+        "quit" | "exit" | "q" => {
+            println!("Bye!");
+            return Ok(true);
+        }
+
+        "help" | "?" | "h" => {
+            println!(
+                r#"
+REPL Commands:
+  Node Operations:
+    node list [kind] [limit]     - List nodes (optionally filter by kind)
+    node get <id>                - Get a node by ID
+    node create <kind> <json>    - Create a new node
+    node update <id> <json>      - Update a node's content
+    node delete <id>             - Delete a node
+
+  Edge Operations:
+    edge list <node_id>          - List edges from a node
+    edge create <from> <to> <kind> - Create an edge
+    edge delete <id>             - Delete an edge
+
+  Search:
+    search <query>               - Full-text search
+    fuzzy <pattern>              - Fuzzy search
+    find <field> <value>         - Search by metadata field
+
+  Database:
+    stats                        - Show database statistics
+    events [limit]               - Show recent events
+
+  Other:
+    clear                        - Clear screen
+    help                         - Show this help
+    quit / exit / q              - Exit REPL
+"#
+            );
+        }
+
+        "clear" | "cls" => {
+            print!("\x1B[2J\x1B[1;1H");
+        }
+
+        "stats" => {
+            let nodes = store.list_nodes(None, usize::MAX)?;
+            println!("Nodes: {}", nodes.len());
+
+            let mut by_kind = std::collections::HashMap::new();
+            for node in &nodes {
+                *by_kind.entry(node.kind.to_string()).or_insert(0) += 1;
+            }
+            println!("By kind:");
+            for (kind, count) in by_kind {
+                println!("  {}: {}", kind, count);
+            }
+        }
+
+        "events" => {
+            let limit = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(10);
+            let events = store.get_events(None, limit)?;
+            for event in events {
+                println!(
+                    "[{}] {:?} {:?} by {}",
+                    event.timestamp.format("%Y-%m-%d %H:%M:%S"),
+                    event.operation,
+                    event.target,
+                    event.agent
+                );
+            }
+        }
+
+        "node" => {
+            if parts.len() < 2 {
+                println!("Usage: node <list|get|create|update|delete> ...");
+                return Ok(false);
+            }
+
+            match parts[1] {
+                "list" | "ls" => {
+                    let kind_filter: Option<NodeKind> = parts.get(2).and_then(|k| k.parse().ok());
+                    let limit = parts.get(3).and_then(|s| s.parse().ok()).unwrap_or(20);
+                    let nodes = store.list_nodes(kind_filter, limit)?;
+                    for node in nodes {
+                        println!("{} [{}] {}", node.id, node.kind, truncate_json(&node.content, 60));
+                    }
+                }
+
+                "get" => {
+                    if parts.len() < 3 {
+                        println!("Usage: node get <id>");
+                        return Ok(false);
+                    }
+                    let id = parts[2].parse().map_err(|e| anyhow!("Invalid ID: {}", e))?;
+                    match store.get_node(id)? {
+                        Some(node) => {
+                            println!("{}", serde_json::to_string_pretty(&node)?);
+                        }
+                        None => println!("Node not found"),
+                    }
+                }
+
+                "create" => {
+                    if parts.len() < 4 {
+                        println!("Usage: node create <kind> <json_content>");
+                        return Ok(false);
+                    }
+                    let kind: NodeKind = parts[2].parse().map_err(|e: String| anyhow!(e))?;
+                    let json_str = parts[3..].join(" ");
+                    let content: serde_json::Value = serde_json::from_str(&json_str)?;
+                    let node = StateNode::new(kind, content);
+                    let created = store.create_node(node, agent.clone())?;
+
+                    // Auto-index
+                    if let Some(ref index) = fulltext_index {
+                        if let Ok(mut writer) = index.writer(50_000_000) {
+                            let _ = index.index_node(&mut writer, &created);
+                            let _ = writer.commit();
+                        }
+                    }
+
+                    println!("Created: {}", created.id);
+                }
+
+                "update" => {
+                    if parts.len() < 4 {
+                        println!("Usage: node update <id> <json_content>");
+                        return Ok(false);
+                    }
+                    let id = parts[2].parse().map_err(|e| anyhow!("Invalid ID: {}", e))?;
+                    let json_str = parts[3..].join(" ");
+                    let content: serde_json::Value = serde_json::from_str(&json_str)?;
+                    let updated = store.update_node(id, content, agent.clone())?;
+
+                    // Re-index
+                    if let Some(ref index) = fulltext_index {
+                        if let Ok(mut writer) = index.writer(50_000_000) {
+                            let _ = index.remove_node(&mut writer, id);
+                            let _ = index.index_node(&mut writer, &updated);
+                            let _ = writer.commit();
+                        }
+                    }
+
+                    println!("Updated: {}", updated.id);
+                }
+
+                "delete" | "rm" => {
+                    if parts.len() < 3 {
+                        println!("Usage: node delete <id>");
+                        return Ok(false);
+                    }
+                    let id = parts[2].parse().map_err(|e| anyhow!("Invalid ID: {}", e))?;
+
+                    // Remove from index
+                    if let Some(ref index) = fulltext_index {
+                        if let Ok(mut writer) = index.writer(50_000_000) {
+                            let _ = index.remove_node(&mut writer, id);
+                            let _ = writer.commit();
+                        }
+                    }
+
+                    store.delete_node(id, agent.clone())?;
+                    println!("Deleted: {}", parts[2]);
+                }
+
+                _ => println!("Unknown node command: {}", parts[1]),
+            }
+        }
+
+        "edge" => {
+            if parts.len() < 2 {
+                println!("Usage: edge <list|create|delete> ...");
+                return Ok(false);
+            }
+
+            match parts[1] {
+                "list" | "ls" => {
+                    if parts.len() < 3 {
+                        println!("Usage: edge list <node_id>");
+                        return Ok(false);
+                    }
+                    let id = parts[2].parse().map_err(|e| anyhow!("Invalid ID: {}", e))?;
+                    let from_edges = store.edges_from(id)?;
+                    let to_edges = store.edges_to(id)?;
+
+                    if !from_edges.is_empty() {
+                        println!("Outgoing:");
+                        for edge in from_edges {
+                            println!("  {} --[{}]--> {}", edge.from, edge.kind, edge.to);
+                        }
+                    }
+                    if !to_edges.is_empty() {
+                        println!("Incoming:");
+                        for edge in to_edges {
+                            println!("  {} --[{}]--> {}", edge.from, edge.kind, edge.to);
+                        }
+                    }
+                }
+
+                "create" => {
+                    if parts.len() < 5 {
+                        println!("Usage: edge create <from_id> <to_id> <kind>");
+                        return Ok(false);
+                    }
+                    let from = parts[2].parse().map_err(|e| anyhow!("Invalid from ID: {}", e))?;
+                    let to = parts[3].parse().map_err(|e| anyhow!("Invalid to ID: {}", e))?;
+                    let kind: EdgeKind = parts[4].parse().map_err(|e: String| anyhow!(e))?;
+                    let edge = StateEdge::new(from, to, kind);
+                    let created = store.create_edge(edge, agent.clone())?;
+                    println!("Created edge: {}", created.id);
+                }
+
+                "delete" | "rm" => {
+                    if parts.len() < 3 {
+                        println!("Usage: edge delete <id>");
+                        return Ok(false);
+                    }
+                    let id = parts[2].parse().map_err(|e| anyhow!("Invalid ID: {}", e))?;
+                    store.delete_edge(id, agent.clone())?;
+                    println!("Deleted: {}", parts[2]);
+                }
+
+                _ => println!("Unknown edge command: {}", parts[1]),
+            }
+        }
+
+        "search" | "s" => {
+            if parts.len() < 2 {
+                println!("Usage: search <query>");
+                return Ok(false);
+            }
+            let query = parts[1..].join(" ");
+
+            if let Some(ref index) = fulltext_index {
+                let results = index.search(&query, None, 20)?;
+                if results.is_empty() {
+                    println!("No results found");
+                } else {
+                    for result in results {
+                        println!("[{:.2}] {} [{}] {}", result.score, result.id, result.kind, truncate_str(&result.content, 60));
+                    }
+                }
+            } else {
+                // Fallback to basic store search
+                let results = store.search(&query, None)?;
+                for node in results.into_iter().take(20) {
+                    println!("{} [{}] {}", node.id, node.kind, truncate_json(&node.content, 60));
+                }
+            }
+        }
+
+        "fuzzy" | "fz" => {
+            if parts.len() < 2 {
+                println!("Usage: fuzzy <pattern>");
+                return Ok(false);
+            }
+            let pattern = parts[1..].join(" ");
+            let fuzzy = FuzzySearch::new();
+            let all_nodes = store.list_nodes(None, usize::MAX)?;
+
+            let results = fuzzy.search(&pattern, &all_nodes, |n| n.content.to_string());
+
+            if results.is_empty() {
+                println!("No results found");
+            } else {
+                for (node, score) in results.into_iter().take(20) {
+                    println!("[{}] {} [{}] {}", score, node.id, node.kind, truncate_json(&node.content, 60));
+                }
+            }
+        }
+
+        "find" => {
+            if parts.len() < 3 {
+                println!("Usage: find <field> <value>");
+                return Ok(false);
+            }
+            let field = parts[1];
+            let value = parts[2..].join(" ");
+            let all_nodes = store.list_nodes(None, usize::MAX)?;
+
+            let mut found = false;
+            for node in all_nodes {
+                if let Some(meta_value) = node.metadata.get(field) {
+                    if meta_value.to_string().contains(&value) {
+                        println!("{} [{}] {}={}", node.id, node.kind, field, meta_value);
+                        found = true;
+                    }
+                }
+            }
+            if !found {
+                println!("No nodes found with {}={}", field, value);
+            }
+        }
+
+        _ => {
+            println!("Unknown command: {}. Type 'help' for available commands.", parts[0]);
+        }
+    }
+
+    Ok(false)
+}
+
+fn truncate_json(value: &serde_json::Value, max_len: usize) -> String {
+    let s = value.to_string();
+    truncate_str(&s, max_len)
+}
+
+fn truncate_str(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max_len.saturating_sub(3)])
+    }
 }

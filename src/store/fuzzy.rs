@@ -55,23 +55,17 @@ impl FuzzySearch {
             return pattern.len() <= max_errors;
         }
 
+        // Use simple Levenshtein-based window matching
         let pattern_chars: Vec<char> = pattern.chars().collect();
         let text_chars: Vec<char> = text.chars().collect();
-        let pat_len = pattern_chars.len();
 
-        // Try windows of varying sizes: pattern_len ± max_errors
-        let min_window = pat_len.saturating_sub(max_errors);
-        let max_window = pat_len + max_errors;
+        // Sliding window approach
+        for start in 0..=text_chars.len().saturating_sub(pattern_chars.len().saturating_sub(max_errors)) {
+            let end = (start + pattern_chars.len() + max_errors).min(text_chars.len());
+            let window: String = text_chars[start..end].iter().collect();
 
-        for window_size in min_window..=max_window {
-            if window_size > text_chars.len() {
-                continue;
-            }
-            for start in 0..=text_chars.len() - window_size {
-                let window: Vec<char> = text_chars[start..start + window_size].to_vec();
-                if levenshtein(&pattern_chars, &window) <= max_errors {
-                    return true;
-                }
+            if levenshtein(&pattern_chars, &window.chars().collect::<Vec<_>>()) <= max_errors {
+                return true;
             }
         }
 
@@ -81,13 +75,13 @@ impl FuzzySearch {
     /// Search a list of items and return sorted by relevance
     pub fn search<'a, T, F>(&self, pattern: &str, items: &'a [T], extract: F) -> Vec<(&'a T, i64)>
     where
-        F: Fn(&T) -> String,
+        F: Fn(&T) -> &str,
     {
         let mut matches: Vec<(&T, i64)> = items
             .iter()
             .filter_map(|item| {
                 let text = extract(item);
-                self.skim_match(pattern, &text).map(|score| (item, score))
+                self.skim_match(pattern, text).map(|score| (item, score))
             })
             .collect();
 
@@ -183,7 +177,7 @@ mod tests {
             "rustacean",
         ];
 
-        let results = fuzzy.search("rust", &items, |s| s.to_string());
+        let results = fuzzy.search("rust", &items, |s| s);
 
         assert!(!results.is_empty());
         // "rust programming" or "rustacean" should be top matches

@@ -59,7 +59,7 @@ impl Vote {
 }
 
 /// Voting strategy for determining approval
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum VotingStrategy {
     /// All voters must approve

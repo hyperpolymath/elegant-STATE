@@ -1,12 +1,8 @@
 use super::{Result, Store, StoreError};
 use crate::schema::*;
-use crate::coordinator::{
-    Proposal, ProposalStatus, Vote, Reputation, AgentCapabilities, CapabilityConfig,
-};
 use serde_json::Value;
 use sled::Db;
 use std::path::Path;
-use ulid::Ulid;
 
 const NODES_TREE: &str = "nodes";
 const EDGES_TREE: &str = "edges";
@@ -14,13 +10,6 @@ const EVENTS_TREE: &str = "events";
 const NODES_BY_KIND_TREE: &str = "nodes_by_kind";
 const EDGES_BY_FROM_TREE: &str = "edges_by_from";
 const EDGES_BY_TO_TREE: &str = "edges_by_to";
-// Coordination trees
-const PROPOSALS_TREE: &str = "proposals";
-const VOTES_TREE: &str = "votes";
-const VOTES_BY_PROPOSAL_TREE: &str = "votes_by_proposal";
-const REPUTATIONS_TREE: &str = "reputations";
-const AGENT_CONFIGS_TREE: &str = "agent_configs";
-const CONFIG_TREE: &str = "config";
 
 pub struct SledStore {
     db: Db,
@@ -61,36 +50,12 @@ impl SledStore {
         Ok(self.db.open_tree(EDGES_BY_TO_TREE)?)
     }
 
-    fn proposals_tree(&self) -> Result<sled::Tree> {
-        Ok(self.db.open_tree(PROPOSALS_TREE)?)
-    }
-
-    fn votes_tree(&self) -> Result<sled::Tree> {
-        Ok(self.db.open_tree(VOTES_TREE)?)
-    }
-
-    fn votes_by_proposal_tree(&self) -> Result<sled::Tree> {
-        Ok(self.db.open_tree(VOTES_BY_PROPOSAL_TREE)?)
-    }
-
-    fn reputations_tree(&self) -> Result<sled::Tree> {
-        Ok(self.db.open_tree(REPUTATIONS_TREE)?)
-    }
-
-    fn agent_configs_tree(&self) -> Result<sled::Tree> {
-        Ok(self.db.open_tree(AGENT_CONFIGS_TREE)?)
-    }
-
-    fn config_tree(&self) -> Result<sled::Tree> {
-        Ok(self.db.open_tree(CONFIG_TREE)?)
-    }
-
     fn serialize<T: serde::Serialize>(value: &T) -> Result<Vec<u8>> {
-        serde_json::to_vec(value).map_err(|e| StoreError::Serialization(e.to_string()))
+        bincode::serialize(value).map_err(|e| StoreError::Serialization(e.to_string()))
     }
 
     fn deserialize<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
-        serde_json::from_slice(bytes).map_err(|e| StoreError::Serialization(e.to_string()))
+        bincode::deserialize(bytes).map_err(|e| StoreError::Serialization(e.to_string()))
     }
 
     fn log_event(&self, event: StateEvent) -> Result<()> {
@@ -125,180 +90,6 @@ impl SledStore {
                 tree.insert(index_key, Self::serialize(&ids)?)?;
             }
         }
-        Ok(())
-    }
-
-    // === Proposal Methods ===
-
-    /// Save a proposal to the store
-    pub fn save_proposal(&self, proposal: &Proposal) -> Result<()> {
-        let tree = self.proposals_tree()?;
-        let key = proposal.id.to_bytes();
-        let value = Self::serialize(proposal)?;
-        tree.insert(key, value)?;
-        Ok(())
-    }
-
-    /// Get a proposal by ID
-    pub fn get_proposal(&self, id: Ulid) -> Result<Option<Proposal>> {
-        let tree = self.proposals_tree()?;
-        match tree.get(id.to_bytes())? {
-            Some(bytes) => Ok(Some(Self::deserialize(&bytes)?)),
-            None => Ok(None),
-        }
-    }
-
-    /// List all proposals, optionally filtered by status
-    pub fn list_proposals(&self, status: Option<ProposalStatus>, limit: usize) -> Result<Vec<Proposal>> {
-        let tree = self.proposals_tree()?;
-        let proposals: Vec<Proposal> = tree
-            .iter()
-            .filter_map(|r| r.ok())
-            .map(|(_, bytes)| Self::deserialize(&bytes))
-            .filter_map(|r| r.ok())
-            .filter(|p: &Proposal| status.map(|s| p.status == s).unwrap_or(true))
-            .take(limit)
-            .collect();
-        Ok(proposals)
-    }
-
-    /// Delete a proposal
-    pub fn delete_proposal(&self, id: Ulid) -> Result<()> {
-        let tree = self.proposals_tree()?;
-        tree.remove(id.to_bytes())?;
-        // Also delete associated votes
-        let votes_tree = self.votes_by_proposal_tree()?;
-        votes_tree.remove(id.to_bytes())?;
-        Ok(())
-    }
-
-    // === Vote Methods ===
-
-    /// Save a vote
-    pub fn save_vote(&self, vote: &Vote) -> Result<()> {
-        let tree = self.votes_tree()?;
-        let key = vote.id.to_bytes();
-        let value = Self::serialize(vote)?;
-        tree.insert(key, value)?;
-
-        // Index by proposal
-        let by_proposal = self.votes_by_proposal_tree()?;
-        self.add_to_index(&by_proposal, &vote.proposal_id.to_bytes(), &key)?;
-        Ok(())
-    }
-
-    /// Get votes for a proposal
-    pub fn get_votes_for_proposal(&self, proposal_id: Ulid) -> Result<Vec<Vote>> {
-        let votes_tree = self.votes_tree()?;
-        let by_proposal = self.votes_by_proposal_tree()?;
-
-        let vote_ids: Vec<Vec<u8>> = by_proposal
-            .get(proposal_id.to_bytes())?
-            .map(|v| Self::deserialize(&v))
-            .transpose()?
-            .unwrap_or_default();
-
-        vote_ids
-            .into_iter()
-            .filter_map(|id| votes_tree.get(&id).ok().flatten())
-            .map(|bytes| Self::deserialize(&bytes))
-            .collect()
-    }
-
-    // === Reputation Methods ===
-
-    /// Save a reputation record
-    pub fn save_reputation(&self, reputation: &Reputation) -> Result<()> {
-        let tree = self.reputations_tree()?;
-        let key = reputation.agent.to_string();
-        let value = Self::serialize(reputation)?;
-        tree.insert(key.as_bytes(), value)?;
-        Ok(())
-    }
-
-    /// Get reputation for an agent
-    pub fn get_reputation(&self, agent: &AgentId) -> Result<Option<Reputation>> {
-        let tree = self.reputations_tree()?;
-        let key = agent.to_string();
-        match tree.get(key.as_bytes())? {
-            Some(bytes) => Ok(Some(Self::deserialize(&bytes)?)),
-            None => Ok(None),
-        }
-    }
-
-    /// Get or create reputation for an agent
-    pub fn get_or_create_reputation(&self, agent: &AgentId) -> Result<Reputation> {
-        match self.get_reputation(agent)? {
-            Some(rep) => Ok(rep),
-            None => {
-                let rep = Reputation::new(agent.clone());
-                self.save_reputation(&rep)?;
-                Ok(rep)
-            }
-        }
-    }
-
-    /// List all reputations
-    pub fn list_reputations(&self) -> Result<Vec<Reputation>> {
-        let tree = self.reputations_tree()?;
-        tree.iter()
-            .filter_map(|r| r.ok())
-            .map(|(_, bytes)| Self::deserialize(&bytes))
-            .collect()
-    }
-
-    // === Agent Config Methods ===
-
-    /// Save agent capabilities
-    pub fn save_agent_config(&self, config: &AgentCapabilities) -> Result<()> {
-        let tree = self.agent_configs_tree()?;
-        let key = config.agent.to_string();
-        let value = Self::serialize(config)?;
-        tree.insert(key.as_bytes(), value)?;
-        Ok(())
-    }
-
-    /// Get agent capabilities
-    pub fn get_agent_config(&self, agent: &AgentId) -> Result<Option<AgentCapabilities>> {
-        let tree = self.agent_configs_tree()?;
-        let key = agent.to_string();
-        match tree.get(key.as_bytes())? {
-            Some(bytes) => Ok(Some(Self::deserialize(&bytes)?)),
-            None => Ok(None),
-        }
-    }
-
-    /// List all agent configs
-    pub fn list_agent_configs(&self) -> Result<Vec<AgentCapabilities>> {
-        let tree = self.agent_configs_tree()?;
-        tree.iter()
-            .filter_map(|r| r.ok())
-            .map(|(_, bytes)| Self::deserialize(&bytes))
-            .collect()
-    }
-
-    // === Global Config Methods ===
-
-    /// Save capability config
-    pub fn save_capability_config(&self, config: &CapabilityConfig) -> Result<()> {
-        let tree = self.config_tree()?;
-        let value = Self::serialize(config)?;
-        tree.insert(b"capability_config", value)?;
-        Ok(())
-    }
-
-    /// Get capability config
-    pub fn get_capability_config(&self) -> Result<Option<CapabilityConfig>> {
-        let tree = self.config_tree()?;
-        match tree.get(b"capability_config")? {
-            Some(bytes) => Ok(Some(Self::deserialize(&bytes)?)),
-            None => Ok(None),
-        }
-    }
-
-    /// Flush all pending writes to disk
-    pub fn flush(&self) -> Result<()> {
-        self.db.flush()?;
         Ok(())
     }
 }
@@ -676,97 +467,5 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].agent, AgentId::Claude);
         assert_eq!(events[0].operation, Operation::Create);
-    }
-
-    #[test]
-    fn test_proposal_persistence() {
-        use crate::coordinator::{Proposal, ProposalTarget, ProposalStatus};
-
-        let store = SledStore::open_temporary().unwrap();
-
-        let proposal = Proposal::new(
-            AgentId::Claude,
-            Operation::Create,
-            ProposalTarget::Node { id: None, kind: Some("insight".into()) },
-            serde_json::json!({"text": "hello"}),
-        );
-        let id = proposal.id;
-
-        // Save
-        store.save_proposal(&proposal).unwrap();
-
-        // Retrieve
-        let retrieved = store.get_proposal(id).unwrap().unwrap();
-        assert_eq!(retrieved.id, id);
-        assert_eq!(retrieved.proposer, AgentId::Claude);
-
-        // List
-        let proposals = store.list_proposals(Some(ProposalStatus::Pending), 10).unwrap();
-        assert_eq!(proposals.len(), 1);
-
-        // Delete
-        store.delete_proposal(id).unwrap();
-        assert!(store.get_proposal(id).unwrap().is_none());
-    }
-
-    #[test]
-    fn test_vote_persistence() {
-        use crate::coordinator::{Vote, VoteDecision, Proposal, ProposalTarget};
-
-        let store = SledStore::open_temporary().unwrap();
-
-        let proposal = Proposal::new(
-            AgentId::User,
-            Operation::Create,
-            ProposalTarget::Node { id: None, kind: Some("task".into()) },
-            serde_json::json!({}),
-        );
-        store.save_proposal(&proposal).unwrap();
-
-        let vote = Vote::new(proposal.id, AgentId::Claude, VoteDecision::Approve);
-        store.save_vote(&vote).unwrap();
-
-        let votes = store.get_votes_for_proposal(proposal.id).unwrap();
-        assert_eq!(votes.len(), 1);
-        assert_eq!(votes[0].decision, VoteDecision::Approve);
-    }
-
-    #[test]
-    fn test_reputation_persistence() {
-        let store = SledStore::open_temporary().unwrap();
-
-        // Get or create
-        let rep = store.get_or_create_reputation(&AgentId::Claude).unwrap();
-        assert_eq!(rep.score, 0.5); // Default neutral score
-
-        // Update and save
-        let mut rep = rep;
-        rep.record_vote_outcome(true);
-        store.save_reputation(&rep).unwrap();
-
-        // Retrieve updated
-        let retrieved = store.get_reputation(&AgentId::Claude).unwrap().unwrap();
-        assert!(retrieved.score > 0.5); // Score improved after correct vote
-
-        // List all
-        let all = store.list_reputations().unwrap();
-        assert_eq!(all.len(), 1);
-    }
-
-    #[test]
-    fn test_agent_config_persistence() {
-        use crate::coordinator::{AgentCapabilities, CapabilityMode};
-
-        let store = SledStore::open_temporary().unwrap();
-
-        let config = AgentCapabilities::new(AgentId::Claude)
-            .with_mode(CapabilityMode::Direct);
-        store.save_agent_config(&config).unwrap();
-
-        let retrieved = store.get_agent_config(&AgentId::Claude).unwrap().unwrap();
-        assert!(matches!(retrieved.mode, CapabilityMode::Direct));
-
-        let all = store.list_agent_configs().unwrap();
-        assert_eq!(all.len(), 1);
     }
 }

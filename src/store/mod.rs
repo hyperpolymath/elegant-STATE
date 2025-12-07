@@ -1,25 +1,8 @@
-//! Persistent storage layer for the state graph
-//!
-//! This module provides:
-//! - [`SledStore`]: Embedded database using sled with event sourcing
-//! - [`FullTextIndex`]: Full-text search powered by tantivy
-//! - [`FuzzySearch`]: Approximate string matching (agrep-like)
-//! - [`PandocConverter`]: Document format conversion
-//! - [`OcrEngine`]: OCR text extraction from images
-
 mod sled_store;
 mod indices;
-mod fulltext;
-mod fuzzy;
-mod pandoc;
-mod ocr;
 
 pub use sled_store::SledStore;
 pub use indices::Indices;
-pub use fulltext::{FullTextIndex, SearchResult};
-pub use fuzzy::FuzzySearch;
-pub use pandoc::{PandocConverter, InputFormat, OutputFormat, detect_format};
-pub use ocr::{OcrEngine, OcrLanguage, OcrEngineMode, PageSegMode, is_image_file};
 
 use crate::schema::*;
 use thiserror::Error;

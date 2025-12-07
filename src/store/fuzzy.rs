@@ -177,7 +177,7 @@ mod tests {
             "rustacean",
         ];
 
-        let results = fuzzy.search("rust", &items, |s| s);
+        let results = fuzzy.search("rust", &items, |s| s.to_string());
 
         assert!(!results.is_empty());
         // "rust programming" or "rustacean" should be top matches

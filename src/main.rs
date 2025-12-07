@@ -1735,8 +1735,13 @@ async fn handle_serve_command(
                 routing::get,
                 Json, Router,
             };
+            use elegant_state::graphql::{build_schema_with_subscriptions, create_event_channel};
 
-            let schema = build_schema(store);
+            // Create event channel for subscriptions
+            let (event_sender, _event_receiver) = create_event_channel(256);
+
+            // Build schema with subscription support
+            let schema = build_schema_with_subscriptions(store, event_sender);
 
             // GraphQL POST handler
             let schema_post = schema.clone();
@@ -1770,6 +1775,7 @@ async fn handle_serve_command(
                 println!("GraphQL server running at http://{}/graphql", addr);
                 println!("WebSocket subscriptions at ws://{}/ws", addr);
                 println!("GraphiQL playground at http://{}/graphql", addr);
+                println!("Event publishing enabled for mutations");
             }
 
             let listener = tokio::net::TcpListener::bind(&addr).await?;

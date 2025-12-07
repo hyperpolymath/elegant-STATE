@@ -2,9 +2,10 @@ use async_graphql::{Context, Object, Result, ID};
 use crate::store::{SledStore, Store};
 use crate::schema::{
     self as domain,
-    AgentId, NodeId, EdgeId,
+    NodeId, EdgeId,
 };
 use super::types::{StateNode, StateEdge, CreateNodeInput, UpdateNodeInput, CreateEdgeInput, AgentKind};
+use super::subscription::{EventSender, SubscriptionEvent};
 use std::sync::Arc;
 use ulid::Ulid;
 
@@ -29,6 +30,12 @@ impl MutationRoot {
         }
 
         let created = store.create_node(node, agent.into())?;
+
+        // Publish event if event sender is available
+        if let Ok(sender) = ctx.data::<EventSender>() {
+            let _ = sender.send(SubscriptionEvent::NodeCreated(created.clone()));
+        }
+
         Ok(created.into())
     }
 
@@ -43,6 +50,12 @@ impl MutationRoot {
         let node_id: NodeId = input.id.parse::<Ulid>().map_err(|e| format!("Invalid ID: {}", e))?;
 
         let updated = store.update_node(node_id, input.content.0, agent.into())?;
+
+        // Publish event if event sender is available
+        if let Ok(sender) = ctx.data::<EventSender>() {
+            let _ = sender.send(SubscriptionEvent::NodeUpdated(updated.clone()));
+        }
+
         Ok(updated.into())
     }
 
@@ -57,6 +70,12 @@ impl MutationRoot {
         let node_id: NodeId = id.parse::<Ulid>().map_err(|e| format!("Invalid ID: {}", e))?;
 
         store.delete_node(node_id, agent.into())?;
+
+        // Publish event if event sender is available
+        if let Ok(sender) = ctx.data::<EventSender>() {
+            let _ = sender.send(SubscriptionEvent::NodeDeleted(node_id));
+        }
+
         Ok(true)
     }
 
@@ -78,6 +97,12 @@ impl MutationRoot {
         }
 
         let created = store.create_edge(edge, agent.into())?;
+
+        // Publish event if event sender is available
+        if let Ok(sender) = ctx.data::<EventSender>() {
+            let _ = sender.send(SubscriptionEvent::EdgeCreated(created.clone()));
+        }
+
         Ok(created.into())
     }
 
@@ -92,6 +117,12 @@ impl MutationRoot {
         let edge_id: EdgeId = id.parse::<Ulid>().map_err(|e| format!("Invalid ID: {}", e))?;
 
         store.delete_edge(edge_id, agent.into())?;
+
+        // Publish event if event sender is available
+        if let Ok(sender) = ctx.data::<EventSender>() {
+            let _ = sender.send(SubscriptionEvent::EdgeDeleted(edge_id));
+        }
+
         Ok(true)
     }
 }

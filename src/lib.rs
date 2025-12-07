@@ -26,7 +26,7 @@ pub use event::EventSourcer;
 pub use coordinator::{
     CapabilityMode, AgentCapabilities, CapabilityConfig,
     Proposal, ProposalStatus, ProposalManager, ProposalTarget,
-    Vote, VoteDecision, VotingStrategy, VotingCoordinator,
+    Vote, VoteDecision, VotingStrategy, VotingCoordinator, VotingResult,
     Reputation, ReputationTracker,
 };
 

@@ -1,3 +1,10 @@
+//! GraphQL API for the state graph
+//!
+//! Provides a complete GraphQL interface for querying and mutating state:
+//! - [`QueryRoot`]: Read operations (nodes, edges, search, history)
+//! - [`MutationRoot`]: Write operations (create, update, delete)
+//! - [`SubscriptionRoot`]: Real-time event streaming via WebSocket
+
 mod query;
 mod mutation;
 mod types;

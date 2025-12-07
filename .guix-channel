@@ -1,0 +1,6 @@
+;; -*- mode: scheme; -*-
+;; elegant-STATE Guix channel
+(channel
+  (version 0)
+  (url "https://github.com/Hyperpolymath/elegant-STATE")
+  (directory "guix"))

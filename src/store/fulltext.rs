@@ -7,7 +7,7 @@ use tantivy::{
     collector::TopDocs,
     directory::MmapDirectory,
     query::QueryParser,
-    schema::{Schema, STORED, TEXT, STRING, Field, Value},
+    schema::{Schema, STORED, TEXT, STRING, Field},
     Index, IndexWriter, IndexReader, TantivyDocument,
 };
 use crate::schema::{NodeId, NodeKind, StateNode};
@@ -98,7 +98,7 @@ impl FullTextIndex {
     }
 
     /// Index a node
-    pub fn index_node(&self, writer: &mut IndexWriter, node: &StateNode) -> Result<(), StoreError> {
+    pub fn index_node(&self, writer: &IndexWriter, node: &StateNode) -> Result<(), StoreError> {
         let mut doc = TantivyDocument::new();
         doc.add_text(self.id_field, node.id.to_string());
         doc.add_text(self.kind_field, node.kind.to_string());
@@ -116,7 +116,7 @@ impl FullTextIndex {
     }
 
     /// Remove a node from the index
-    pub fn remove_node(&self, writer: &mut IndexWriter, id: NodeId) -> Result<(), StoreError> {
+    pub fn remove_node(&self, writer: &IndexWriter, id: NodeId) -> Result<(), StoreError> {
         let term = tantivy::Term::from_field_text(self.id_field, &id.to_string());
         writer.delete_term(term);
         Ok(())
@@ -208,7 +208,7 @@ mod tests {
         let mut writer = index.writer(50_000_000).unwrap();
 
         let node = StateNode::new(NodeKind::Insight, json!({"text": "hello world rust programming"}));
-        index.index_node(&mut writer, &node).unwrap();
+        index.index_node(&writer, &node).unwrap();
         writer.commit().unwrap();
 
         let results = index.search("rust", None, 10).unwrap();

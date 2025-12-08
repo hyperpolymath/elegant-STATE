@@ -1,12 +1,8 @@
 use super::{Result, Store, StoreError};
 use crate::schema::*;
-use crate::coordinator::{
-    Proposal, ProposalStatus, Vote, Reputation, AgentCapabilities, CapabilityConfig,
-};
 use serde_json::Value;
 use sled::Db;
 use std::path::Path;
-use ulid::Ulid;
 
 const NODES_TREE: &str = "nodes";
 const EDGES_TREE: &str = "edges";
@@ -14,13 +10,6 @@ const EVENTS_TREE: &str = "events";
 const NODES_BY_KIND_TREE: &str = "nodes_by_kind";
 const EDGES_BY_FROM_TREE: &str = "edges_by_from";
 const EDGES_BY_TO_TREE: &str = "edges_by_to";
-// Coordination trees
-const PROPOSALS_TREE: &str = "proposals";
-const VOTES_TREE: &str = "votes";
-const VOTES_BY_PROPOSAL_TREE: &str = "votes_by_proposal";
-const REPUTATIONS_TREE: &str = "reputations";
-const AGENT_CONFIGS_TREE: &str = "agent_configs";
-const CONFIG_TREE: &str = "config";
 
 pub struct SledStore {
     db: Db,
@@ -61,36 +50,12 @@ impl SledStore {
         Ok(self.db.open_tree(EDGES_BY_TO_TREE)?)
     }
 
-    fn proposals_tree(&self) -> Result<sled::Tree> {
-        Ok(self.db.open_tree(PROPOSALS_TREE)?)
-    }
-
-    fn votes_tree(&self) -> Result<sled::Tree> {
-        Ok(self.db.open_tree(VOTES_TREE)?)
-    }
-
-    fn votes_by_proposal_tree(&self) -> Result<sled::Tree> {
-        Ok(self.db.open_tree(VOTES_BY_PROPOSAL_TREE)?)
-    }
-
-    fn reputations_tree(&self) -> Result<sled::Tree> {
-        Ok(self.db.open_tree(REPUTATIONS_TREE)?)
-    }
-
-    fn agent_configs_tree(&self) -> Result<sled::Tree> {
-        Ok(self.db.open_tree(AGENT_CONFIGS_TREE)?)
-    }
-
-    fn config_tree(&self) -> Result<sled::Tree> {
-        Ok(self.db.open_tree(CONFIG_TREE)?)
-    }
-
     fn serialize<T: serde::Serialize>(value: &T) -> Result<Vec<u8>> {
-        serde_json::to_vec(value).map_err(|e| StoreError::Serialization(e.to_string()))
+        bincode::serialize(value).map_err(|e| StoreError::Serialization(e.to_string()))
     }
 
     fn deserialize<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
-        serde_json::from_slice(bytes).map_err(|e| StoreError::Serialization(e.to_string()))
+        bincode::deserialize(bytes).map_err(|e| StoreError::Serialization(e.to_string()))
     }
 
     fn log_event(&self, event: StateEvent) -> Result<()> {
@@ -125,146 +90,6 @@ impl SledStore {
                 tree.insert(index_key, Self::serialize(&ids)?)?;
             }
         }
-        Ok(())
-    }
-
-    // === Proposal Methods ===
-
-    pub fn save_proposal(&self, proposal: &Proposal) -> Result<()> {
-        let tree = self.proposals_tree()?;
-        let key = proposal.id.to_bytes();
-        let value = Self::serialize(proposal)?;
-        tree.insert(key, value)?;
-        Ok(())
-    }
-
-    pub fn get_proposal(&self, id: Ulid) -> Result<Option<Proposal>> {
-        let tree = self.proposals_tree()?;
-        match tree.get(id.to_bytes())? {
-            Some(bytes) => Ok(Some(Self::deserialize(&bytes)?)),
-            None => Ok(None),
-        }
-    }
-
-    pub fn list_proposals(&self, status: Option<ProposalStatus>, limit: usize) -> Result<Vec<Proposal>> {
-        let tree = self.proposals_tree()?;
-        let proposals: Vec<Proposal> = tree
-            .iter()
-            .filter_map(|r| r.ok())
-            .map(|(_, bytes)| Self::deserialize(&bytes))
-            .filter_map(|r| r.ok())
-            .filter(|p: &Proposal| status.map(|s| p.status == s).unwrap_or(true))
-            .take(limit)
-            .collect();
-        Ok(proposals)
-    }
-
-    pub fn delete_proposal(&self, id: Ulid) -> Result<()> {
-        let tree = self.proposals_tree()?;
-        tree.remove(id.to_bytes())?;
-        let votes_tree = self.votes_by_proposal_tree()?;
-        votes_tree.remove(id.to_bytes())?;
-        Ok(())
-    }
-
-    // === Vote Methods ===
-
-    pub fn save_vote(&self, vote: &Vote) -> Result<()> {
-        let tree = self.votes_tree()?;
-        let key = vote.id.to_bytes();
-        let value = Self::serialize(vote)?;
-        tree.insert(key, value)?;
-        let by_proposal = self.votes_by_proposal_tree()?;
-        self.add_to_index(&by_proposal, &vote.proposal_id.to_bytes(), &key)?;
-        Ok(())
-    }
-
-    pub fn get_votes_for_proposal(&self, proposal_id: Ulid) -> Result<Vec<Vote>> {
-        let votes_tree = self.votes_tree()?;
-        let by_proposal = self.votes_by_proposal_tree()?;
-        let vote_ids: Vec<Vec<u8>> = by_proposal
-            .get(proposal_id.to_bytes())?
-            .map(|v| Self::deserialize(&v))
-            .transpose()?
-            .unwrap_or_default();
-        vote_ids
-            .into_iter()
-            .filter_map(|id| votes_tree.get(&id).ok().flatten())
-            .map(|bytes| Self::deserialize(&bytes))
-            .collect()
-    }
-
-    // === Reputation Methods ===
-
-    pub fn save_reputation(&self, reputation: &Reputation) -> Result<()> {
-        let tree = self.reputations_tree()?;
-        let key = reputation.agent.to_string();
-        let value = Self::serialize(reputation)?;
-        tree.insert(key.as_bytes(), value)?;
-        Ok(())
-    }
-
-    pub fn get_reputation(&self, agent: &AgentId) -> Result<Option<Reputation>> {
-        let tree = self.reputations_tree()?;
-        let key = agent.to_string();
-        match tree.get(key.as_bytes())? {
-            Some(bytes) => Ok(Some(Self::deserialize(&bytes)?)),
-            None => Ok(None),
-        }
-    }
-
-    pub fn list_reputations(&self) -> Result<Vec<Reputation>> {
-        let tree = self.reputations_tree()?;
-        tree.iter()
-            .filter_map(|r| r.ok())
-            .map(|(_, bytes)| Self::deserialize(&bytes))
-            .collect()
-    }
-
-    // === Agent Config Methods ===
-
-    pub fn save_agent_config(&self, config: &AgentCapabilities) -> Result<()> {
-        let tree = self.agent_configs_tree()?;
-        let key = config.agent.to_string();
-        let value = Self::serialize(config)?;
-        tree.insert(key.as_bytes(), value)?;
-        Ok(())
-    }
-
-    pub fn get_agent_config(&self, agent: &AgentId) -> Result<Option<AgentCapabilities>> {
-        let tree = self.agent_configs_tree()?;
-        let key = agent.to_string();
-        match tree.get(key.as_bytes())? {
-            Some(bytes) => Ok(Some(Self::deserialize(&bytes)?)),
-            None => Ok(None),
-        }
-    }
-
-    pub fn list_agent_configs(&self) -> Result<Vec<AgentCapabilities>> {
-        let tree = self.agent_configs_tree()?;
-        tree.iter()
-            .filter_map(|r| r.ok())
-            .map(|(_, bytes)| Self::deserialize(&bytes))
-            .collect()
-    }
-
-    pub fn save_capability_config(&self, config: &CapabilityConfig) -> Result<()> {
-        let tree = self.config_tree()?;
-        let value = Self::serialize(config)?;
-        tree.insert(b"capability_config", value)?;
-        Ok(())
-    }
-
-    pub fn get_capability_config(&self) -> Result<Option<CapabilityConfig>> {
-        let tree = self.config_tree()?;
-        match tree.get(b"capability_config")? {
-            Some(bytes) => Ok(Some(Self::deserialize(&bytes)?)),
-            None => Ok(None),
-        }
-    }
-
-    pub fn flush(&self) -> Result<()> {
-        self.db.flush()?;
         Ok(())
     }
 }

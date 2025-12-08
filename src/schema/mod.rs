@@ -1,10 +1,3 @@
-//! State graph schema types
-//!
-//! This module defines the core data structures for the state graph:
-//! - [`StateNode`]: Vertices in the graph with typed content
-//! - [`StateEdge`]: Directed edges connecting nodes
-//! - [`StateEvent`]: Event sourcing records for all mutations
-
 mod node;
 mod edge;
 mod event;

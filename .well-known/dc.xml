@@ -1,23 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<metadata xmlns="http://purl.org/dc/elements/1.1/"
-          xmlns:dcterms="http://purl.org/dc/terms/">
+<metadata
+  xmlns="http://purl.org/dc/elements/1.1/"
+  xmlns:dcterms="http://purl.org/dc/terms/"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <title>elegant-STATE</title>
-  <creator>Hyper Polymath</creator>
+  <creator>Jonathan D.A. Jewell</creator>
+  <subject>software-development</subject>
   <subject>RSR</subject>
-  <description>MVP v0.1.0 complete and exceeds original scope
-Event replay and undo are stubs
-GraphQL subscriptions not implemented
-Semantic search requires embedding model
-API reference incomplete
-No user guide
-Error messages could be more helpful</description>
+  <subject>Rhodium Standard</subject>
+  <description>Elegant state machine definition and visualization</description>
   <publisher>Rhodium Standard</publisher>
+  <contributor>Jonathan D.A. Jewell</contributor>
   <date>2025</date>
   <type>Software</type>
+  <format>application/octet-stream</format>
   <identifier>https://github.com/hyperpolymath/elegant-STATE</identifier>
+  <source>https://github.com/hyperpolymath/elegant-STATE</source>
   <language>en</language>
+  <relation>https://rhodium.sh</relation>
   <rights>AGPL-3.0-or-later OR LicenseRef-Palimpsest-0.5</rights>
   <dcterms:license>https://spdx.org/licenses/AGPL-3.0-or-later.html</dcterms:license>
-  <dcterms:hasVersion>0.1.0</dcterms:hasVersion>
-  <dcterms:isPartOf>RSR Framework</dcterms:isPartOf>
 </metadata>

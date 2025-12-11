@@ -1,59 +1,76 @@
 = elegant-STATE
+Jonathan D.A. Jewell <jonathan.jewell@gmail.com>
+:toc: macro
+:icons: font
+:source-highlighter: rouge
+:experimental:
+:url-github: https://github.com/hyperpolymath/elegant-STATE
+:url-gitlab: https://gitlab.com/hyperpolymath/elegant-STATE
+:url-bitbucket: https://bitbucket.org/hyperpolymath/elegant-STATE
+:url-codeberg: https://codeberg.org/hyperpolymath/elegant-STATE
 
-> Nickel schemas for project state and policy, with export to ECOSYSTEM.scm
+Elegant state machine definition and visualization
 
-== What This Is Now
+image:https://img.shields.io/badge/RSR-Certified-gold[RSR Certified]
+image:https://img.shields.io/badge/License-AGPL%20v3-blue[License]
 
-elegant-STATE has been *simplified*. The complex infrastructure (GraphQL, event sourcing, multi-agent coordination) is archived. What remains is the elegant core:
+toc::[]
 
-- *Policy schemas* - What rules look like in Nickel
-- *Ecosystem schemas* - What project registries look like
-- *Export to SCM* - Generate ECOSYSTEM.scm from Nickel configs
+== Overview
 
-== Why Simplified?
+elegant-STATE is part of the link:https://rhodium.sh[Rhodium Standard] (RSR) ecosystem.
 
-The original elegant-STATE tried to solve orchestration with complexity. The insight from [Conative Gating](https://github.com/hyperpolymath/conative-gating) was:
+Domain: *software-development*
 
-> Orchestration becomes trivially simple when enforcement works.
+== Installation
 
-If an SLM actually enforces policy, you don't need elaborate coordination machinery. You need:
-1. A way to describe policy (Nickel)
-2. A way to describe the ecosystem (Nickel)
-3. A way to export to homoiconic format (Racket → SCM)
+[source,bash]
+----
+# Clone from GitHub (primary)
+git clone {url-github}
 
-== Structure
+# Or from mirrors
+git clone {url-gitlab}
+git clone {url-codeberg}
+----
 
-```
-elegant-STATE/
-├── schema/
-│   ├── policy.ncl       # Policy schema
-│   └── ecosystem.ncl    # Project registry schema
-├── export/
-│   └── to-scm.rkt       # Export to ECOSYSTEM.scm
-└── examples/
-    ├── policy.ncl       # Example policy
-    └── ECOSYSTEM.scm    # Example ecosystem file
-```
+== RSR Stack
 
-== Usage
+This project follows RSR conventions:
 
-```bash
-= Validate a policy
-nickel typecheck schema/policy.ncl
+* ✅ ReScript for frontend/logic
+* ✅ Deno for JS runtime
+* ✅ WASM for performance-critical code
+* ✅ Rust/OCaml/Haskell for systems/proofs
+* ✅ Guile/Scheme for configuration
+* ❌ No TypeScript
+* ❌ No Go
+* ❌ No npm
 
-= Export to ECOSYSTEM.scm
-racket export/to-scm.rkt examples/policy.ncl > ECOSYSTEM.scm
-```
+== Mirrors
 
-== The Archived Infrastructure
+[cols="1,2"]
+|===
+| Platform | URL
 
-The original v0.1.0 implementation (Rust + GraphQL + Sled + coordinator system) is preserved in `.archive/` for reference. It was a functional MVP that exceeded its original scope - but the complexity was the message that a simpler approach was needed.
-
-== See Also
-
-- [Conative Gating](https://github.com/hyperpolymath/conative-gating) - The enforcement mechanism that makes this simplicity possible
-- [STATE.scm](./STATE.scm) - Project state checkpoint
+| GitHub (primary) | {url-github}
+| GitLab | {url-gitlab}
+| Bitbucket | {url-bitbucket}
+| Codeberg | {url-codeberg}
+|===
 
 == License
 
-AGPL-3.0-or-later WITH Palimpsest-0.8
+Licensed under AGPL-3.0-or-later OR LicenseRef-Palimpsest-0.5.
+
+See link:LICENSE[LICENSE] for details.
+
+== Contributing
+
+See link:CONTRIBUTING.adoc[CONTRIBUTING.adoc].
+
+== Metadata
+
+* Domain: software-development
+* Framework: RSR (Rhodium Standard Repository)
+* Dublin Core: link:.well-known/dc.xml[.well-known/dc.xml]
